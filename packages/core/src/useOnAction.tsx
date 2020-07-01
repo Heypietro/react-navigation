@@ -8,16 +8,24 @@ import type {
 } from '@react-navigation/routers';
 import NavigationBuilderContext, {
   ChildActionListener,
+  ChildBeforeRemoveListener,
 } from './NavigationBuilderContext';
+import useOnPreventRemove from './useOnPreventRemove';
+import type { NavigationEventEmitter } from './useEventEmitter';
+import type { EventMapCore } from './types';
 
 type Options = {
   router: Router<NavigationState, NavigationAction>;
   key?: string;
   getState: () => NavigationState;
   setState: (state: NavigationState | PartialState<NavigationState>) => void;
-  listeners: ChildActionListener[];
+  actionListeners: ChildActionListener[];
+  beforeRemoveListeners: Record<string, ChildBeforeRemoveListener | undefined>;
   routerConfigOptions: RouterConfigOptions;
+  emitter: NavigationEventEmitter<EventMapCore<any>>;
 };
+
+const BEFORE_REMOVE_EMITTED = Symbol('BEFORE_REMOVE_EMITTED');
 
 /**
  * Hook to handle actions for a navigator, including state updates and bubbling.
@@ -33,8 +41,10 @@ export default function useOnAction({
   getState,
   setState,
   key,
-  listeners,
+  actionListeners,
+  beforeRemoveListeners,
   routerConfigOptions,
+  emitter,
 }: Options) {
   const {
     onAction: onActionParent,
@@ -82,6 +92,45 @@ export default function useOnAction({
           onDispatchAction(action, state === result);
 
           if (state !== result) {
+            // @ts-expect-error: add this property to mark that we've already emitted this action
+            if (action[BEFORE_REMOVE_EMITTED] !== true) {
+              const beforeRemoveAction = {
+                ...action,
+                [BEFORE_REMOVE_EMITTED]: true,
+              };
+
+              const nextRouteKeys = (result.routes as any[]).map(
+                (route: { key?: string }) => route.key
+              );
+
+              const removedRoutes = state.routes.filter(
+                (route) => !nextRouteKeys.includes(route.key)
+              );
+
+              // If a screen is getting removed from the state, we give a chance to prevent this action
+              for (const route of removedRoutes) {
+                const event = emitter.emit({
+                  type: 'beforeRemove',
+                  target: route.key,
+                  data: { action: beforeRemoveAction },
+                  canPreventDefault: true,
+                });
+
+                if (event.defaultPrevented) {
+                  return true;
+                }
+
+                // We also need to check if any child screens want to prevent it
+                const isPrevented = beforeRemoveListeners[route.key]?.(
+                  beforeRemoveAction
+                );
+
+                if (isPrevented) {
+                  return true;
+                }
+              }
+            }
+
             setState(result);
           }
 
@@ -107,8 +156,8 @@ export default function useOnAction({
       }
 
       // If the action wasn't handled by current navigator or a parent navigator, let children handle it
-      for (let i = listeners.length - 1; i >= 0; i--) {
-        const listener = listeners[i];
+      for (let i = actionListeners.length - 1; i >= 0; i--) {
+        const listener = actionListeners[i];
 
         if (listener(action, visitedNavigators)) {
           return true;
@@ -118,16 +167,24 @@ export default function useOnAction({
       return false;
     },
     [
+      actionListeners,
+      beforeRemoveListeners,
+      emitter,
       getState,
-      router,
+      key,
       onActionParent,
       onDispatchAction,
       onRouteFocusParent,
+      router,
       setState,
-      key,
-      listeners,
     ]
   );
+
+  useOnPreventRemove({
+    getState,
+    emitter,
+    beforeRemoveListeners,
+  });
 
   React.useEffect(() => addListenerParent?.('action', onAction), [
     addListenerParent,

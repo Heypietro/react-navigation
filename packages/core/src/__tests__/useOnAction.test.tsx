@@ -1,9 +1,10 @@
 import * as React from 'react';
-import { render } from 'react-native-testing-library';
-import type {
+import { act, render } from 'react-native-testing-library';
+import {
   Router,
   DefaultRouterOptions,
   NavigationState,
+  StackRouter,
 } from '@react-navigation/routers';
 import useNavigationBuilder from '../useNavigationBuilder';
 import BaseNavigationContainer from '../BaseNavigationContainer';
@@ -12,8 +13,15 @@ import MockRouter, {
   MockActions,
   MockRouterKey,
 } from './__fixtures__/MockRouter';
+import type { NavigationContainerRef } from '../types';
 
 beforeEach(() => (MockRouterKey.current = 0));
+
+jest.mock('nanoid/non-secure', () => {
+  let key = 0;
+
+  return { nanoid: () => String(++key) };
+});
 
 it("lets parent handle the action if child didn't", () => {
   function CurrentRouter(options: DefaultRouterOptions) {
@@ -519,4 +527,429 @@ it('logs error if no navigator handled the action', () => {
   );
 
   spy.mockRestore();
+});
+
+it("prevents removing a screen with 'beforeRemove' event", () => {
+  const TestNavigator = (props: any) => {
+    const { state, descriptors } = useNavigationBuilder(StackRouter, props);
+
+    return (
+      <React.Fragment>
+        {state.routes.map((route) => descriptors[route.key].render())}
+      </React.Fragment>
+    );
+  };
+
+  const onBeforeRemove = jest.fn();
+
+  let shouldPrevent = true;
+
+  const TestScreen = (props: any) => {
+    React.useEffect(
+      () =>
+        props.navigation.addListener('beforeRemove', (e: any) => {
+          onBeforeRemove();
+
+          if (shouldPrevent) {
+            e.preventDefault();
+          }
+        }),
+      [props.navigation]
+    );
+
+    return null;
+  };
+
+  const onStateChange = jest.fn();
+
+  const ref = React.createRef<NavigationContainerRef>();
+
+  const element = (
+    <BaseNavigationContainer ref={ref} onStateChange={onStateChange}>
+      <TestNavigator>
+        <Screen name="foo">{() => null}</Screen>
+        <Screen name="bar" component={TestScreen} />
+        <Screen name="baz">{() => null}</Screen>
+      </TestNavigator>
+    </BaseNavigationContainer>
+  );
+
+  render(element);
+
+  act(() => ref.current?.navigate('bar'));
+
+  expect(onStateChange).toBeCalledTimes(1);
+  expect(onStateChange).toBeCalledWith({
+    index: 1,
+    key: 'stack-12',
+    routeNames: ['foo', 'bar', 'baz'],
+    routes: [
+      { key: 'foo-13', name: 'foo' },
+      { key: 'bar-14', name: 'bar' },
+    ],
+    stale: false,
+    type: 'stack',
+  });
+
+  act(() => ref.current?.navigate('baz'));
+
+  expect(onStateChange).toBeCalledTimes(2);
+  expect(onStateChange).toBeCalledWith({
+    index: 2,
+    key: 'stack-12',
+    routeNames: ['foo', 'bar', 'baz'],
+    routes: [
+      { key: 'foo-13', name: 'foo' },
+      { key: 'bar-14', name: 'bar' },
+      {
+        key: 'baz-15',
+        name: 'baz',
+      },
+    ],
+    stale: false,
+    type: 'stack',
+  });
+
+  act(() => ref.current?.navigate('foo'));
+
+  expect(onStateChange).toBeCalledTimes(2);
+  expect(onBeforeRemove).toBeCalledTimes(1);
+
+  expect(ref.current?.getRootState()).toEqual({
+    index: 2,
+    key: 'stack-12',
+    routeNames: ['foo', 'bar', 'baz'],
+    routes: [
+      { key: 'foo-13', name: 'foo' },
+      { key: 'bar-14', name: 'bar' },
+      { key: 'baz-15', name: 'baz' },
+    ],
+    stale: false,
+    type: 'stack',
+  });
+
+  shouldPrevent = false;
+
+  act(() => ref.current?.navigate('foo'));
+
+  expect(onStateChange).toBeCalledTimes(3);
+  expect(onStateChange).toBeCalledWith({
+    index: 0,
+    key: 'stack-12',
+    routeNames: ['foo', 'bar', 'baz'],
+    routes: [{ key: 'foo-13', name: 'foo' }],
+    stale: false,
+    type: 'stack',
+  });
+});
+
+it("prevents removing a child screen with 'beforeRemove' event", () => {
+  const TestNavigator = (props: any) => {
+    const { state, descriptors } = useNavigationBuilder(StackRouter, props);
+
+    return (
+      <React.Fragment>
+        {state.routes.map((route) => descriptors[route.key].render())}
+      </React.Fragment>
+    );
+  };
+
+  const onBeforeRemove = jest.fn();
+
+  let shouldPrevent = true;
+
+  const TestScreen = (props: any) => {
+    React.useEffect(
+      () =>
+        props.navigation.addListener('beforeRemove', (e: any) => {
+          onBeforeRemove();
+
+          if (shouldPrevent) {
+            e.preventDefault();
+          }
+        }),
+      [props.navigation]
+    );
+
+    return null;
+  };
+
+  const onStateChange = jest.fn();
+
+  const ref = React.createRef<NavigationContainerRef>();
+
+  const element = (
+    <BaseNavigationContainer ref={ref} onStateChange={onStateChange}>
+      <TestNavigator>
+        <Screen name="foo">{() => null}</Screen>
+        <Screen name="bar">{() => null}</Screen>
+        <Screen name="baz">
+          {() => (
+            <TestNavigator>
+              <Screen name="qux" component={TestScreen} />
+              <Screen name="lex">{() => null}</Screen>
+            </TestNavigator>
+          )}
+        </Screen>
+      </TestNavigator>
+    </BaseNavigationContainer>
+  );
+
+  render(element);
+
+  act(() => ref.current?.navigate('bar'));
+
+  expect(onStateChange).toBeCalledTimes(1);
+  expect(onStateChange).toBeCalledWith({
+    index: 1,
+    key: 'stack-17',
+    routeNames: ['foo', 'bar', 'baz'],
+    routes: [
+      { key: 'foo-18', name: 'foo' },
+      { key: 'bar-19', name: 'bar' },
+    ],
+    stale: false,
+    type: 'stack',
+  });
+
+  act(() => ref.current?.navigate('baz'));
+
+  expect(onStateChange).toBeCalledTimes(2);
+  expect(onStateChange).toBeCalledWith({
+    index: 2,
+    key: 'stack-17',
+    routeNames: ['foo', 'bar', 'baz'],
+    routes: [
+      { key: 'foo-18', name: 'foo' },
+      { key: 'bar-19', name: 'bar' },
+      {
+        key: 'baz-20',
+        name: 'baz',
+        state: {
+          index: 0,
+          key: 'stack-22',
+          routeNames: ['qux', 'lex'],
+          routes: [{ key: 'qux-23', name: 'qux' }],
+          stale: false,
+          type: 'stack',
+        },
+      },
+    ],
+    stale: false,
+    type: 'stack',
+  });
+
+  act(() => ref.current?.navigate('foo'));
+
+  expect(onStateChange).toBeCalledTimes(2);
+  expect(onBeforeRemove).toBeCalledTimes(1);
+
+  expect(ref.current?.getRootState()).toEqual({
+    index: 2,
+    key: 'stack-17',
+    routeNames: ['foo', 'bar', 'baz'],
+    routes: [
+      { key: 'foo-18', name: 'foo' },
+      { key: 'bar-19', name: 'bar' },
+      {
+        key: 'baz-20',
+        name: 'baz',
+        state: {
+          index: 0,
+          key: 'stack-22',
+          routeNames: ['qux', 'lex'],
+          routes: [{ key: 'qux-23', name: 'qux' }],
+          stale: false,
+          type: 'stack',
+        },
+      },
+    ],
+    stale: false,
+    type: 'stack',
+  });
+
+  shouldPrevent = false;
+
+  act(() => ref.current?.navigate('foo'));
+
+  expect(onStateChange).toBeCalledTimes(3);
+  expect(onStateChange).toBeCalledWith({
+    index: 0,
+    key: 'stack-17',
+    routeNames: ['foo', 'bar', 'baz'],
+    routes: [{ key: 'foo-18', name: 'foo' }],
+    stale: false,
+    type: 'stack',
+  });
+});
+
+it("prevents removing a grand child screen with 'beforeRemove' event", () => {
+  const TestNavigator = (props: any) => {
+    const { state, descriptors } = useNavigationBuilder(StackRouter, props);
+
+    return (
+      <React.Fragment>
+        {state.routes.map((route) => descriptors[route.key].render())}
+      </React.Fragment>
+    );
+  };
+
+  const onBeforeRemove = jest.fn();
+
+  let shouldPrevent = true;
+
+  const TestScreen = (props: any) => {
+    React.useEffect(
+      () =>
+        props.navigation.addListener('beforeRemove', (e: any) => {
+          onBeforeRemove();
+
+          if (shouldPrevent) {
+            e.preventDefault();
+          }
+        }),
+      [props.navigation]
+    );
+
+    return null;
+  };
+
+  const onStateChange = jest.fn();
+
+  const ref = React.createRef<NavigationContainerRef>();
+
+  const element = (
+    <BaseNavigationContainer ref={ref} onStateChange={onStateChange}>
+      <TestNavigator>
+        <Screen name="foo">{() => null}</Screen>
+        <Screen name="bar">{() => null}</Screen>
+        <Screen name="baz">
+          {() => (
+            <TestNavigator>
+              <Screen name="qux">
+                {() => (
+                  <TestNavigator>
+                    <Screen name="lex" component={TestScreen} />
+                  </TestNavigator>
+                )}
+              </Screen>
+            </TestNavigator>
+          )}
+        </Screen>
+      </TestNavigator>
+    </BaseNavigationContainer>
+  );
+
+  render(element);
+
+  act(() => ref.current?.navigate('bar'));
+
+  expect(onStateChange).toBeCalledTimes(1);
+  expect(onStateChange).toBeCalledWith({
+    index: 1,
+    key: 'stack-25',
+    routeNames: ['foo', 'bar', 'baz'],
+    routes: [
+      { key: 'foo-26', name: 'foo' },
+      { key: 'bar-27', name: 'bar' },
+    ],
+    stale: false,
+    type: 'stack',
+  });
+
+  act(() => ref.current?.navigate('baz'));
+
+  expect(onStateChange).toBeCalledTimes(2);
+  expect(onStateChange).toBeCalledWith({
+    index: 2,
+    key: 'stack-25',
+    routeNames: ['foo', 'bar', 'baz'],
+    routes: [
+      { key: 'foo-26', name: 'foo' },
+      { key: 'bar-27', name: 'bar' },
+      {
+        key: 'baz-28',
+        name: 'baz',
+        state: {
+          index: 0,
+          key: 'stack-30',
+          routeNames: ['qux'],
+          routes: [
+            {
+              key: 'qux-31',
+              name: 'qux',
+              state: {
+                index: 0,
+                key: 'stack-33',
+                routeNames: ['lex'],
+                routes: [{ key: 'lex-34', name: 'lex' }],
+                stale: false,
+                type: 'stack',
+              },
+            },
+          ],
+          stale: false,
+          type: 'stack',
+        },
+      },
+    ],
+    stale: false,
+    type: 'stack',
+  });
+
+  act(() => ref.current?.navigate('foo'));
+
+  expect(onStateChange).toBeCalledTimes(2);
+  expect(onBeforeRemove).toBeCalledTimes(1);
+
+  expect(ref.current?.getRootState()).toEqual({
+    index: 2,
+    key: 'stack-25',
+    routeNames: ['foo', 'bar', 'baz'],
+    routes: [
+      { key: 'foo-26', name: 'foo' },
+      { key: 'bar-27', name: 'bar' },
+      {
+        key: 'baz-28',
+        name: 'baz',
+        state: {
+          index: 0,
+          key: 'stack-30',
+          routeNames: ['qux'],
+          routes: [
+            {
+              key: 'qux-31',
+              name: 'qux',
+              state: {
+                index: 0,
+                key: 'stack-33',
+                routeNames: ['lex'],
+                routes: [{ key: 'lex-34', name: 'lex' }],
+                stale: false,
+                type: 'stack',
+              },
+            },
+          ],
+          stale: false,
+          type: 'stack',
+        },
+      },
+    ],
+    stale: false,
+    type: 'stack',
+  });
+
+  shouldPrevent = false;
+
+  act(() => ref.current?.navigate('foo'));
+
+  expect(onStateChange).toBeCalledTimes(3);
+  expect(onStateChange).toBeCalledWith({
+    index: 0,
+    key: 'stack-25',
+    routeNames: ['foo', 'bar', 'baz'],
+    routes: [{ key: 'foo-26', name: 'foo' }],
+    stale: false,
+    type: 'stack',
+  });
 });
